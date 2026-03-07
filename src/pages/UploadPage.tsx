@@ -11,7 +11,7 @@ import { formatFileSize } from '../utils/format';
 
 export default function UploadPage() {
   const { files, clearForNewBatch } = useUploadStore();
-  const { session, batches, currentBatchNumber, isBatchActive, completeBatch } = useSessionStore();
+  const { session, currentBatchNumber, isBatchActive, completeBatch } = useSessionStore();
 
   // Track the batch start time
   const batchStartRef = useRef<string | null>(null);

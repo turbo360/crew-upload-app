@@ -6,7 +6,6 @@ export default function BatchTrackerPanel() {
   const { batches, currentBatchNumber, isBatchActive, startBatch } = useSessionStore();
   const { files } = useUploadStore();
 
-  const uploadingCount = files.filter(f => f.status === 'uploading').length;
   const completedCount = files.filter(f => f.status === 'completed').length;
   const totalFiles = files.length;
   const progress = totalFiles > 0 ? Math.round((completedCount / totalFiles) * 100) : 0;
