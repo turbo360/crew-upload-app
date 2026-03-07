@@ -17,8 +17,11 @@ export interface UploadFile {
   startTime?: number;
   speed?: number; // Average speed
   instantSpeed?: number; // Current/instant speed (last update)
+  emaSpeed?: number; // Smoothed speed (EMA)
   lastUpdateTime?: number;
   lastUpdateBytes?: number;
+  lastHeartbeat?: number;
+  isStalled?: boolean;
 }
 
 interface UploadState {
@@ -138,6 +141,47 @@ export const useUploadStore = create<UploadState>((set, get) => {
     window.electronAPI.onUploadError((data) => {
       get().handleError(data.uploadId, data.error);
     });
+
+    window.electronAPI.onUploadHeartbeat((data) => {
+      set(state => ({
+        files: state.files.map(f =>
+          f.id === data.uploadId ? { ...f, lastHeartbeat: Date.now(), isStalled: false } : f
+        )
+      }));
+    });
+
+    window.electronAPI.onUploadPausedBySystem((data) => {
+      set(state => ({
+        files: state.files.map(f =>
+          f.id === data.uploadId ? { ...f, status: 'paused' } : f
+        )
+      }));
+    });
+
+    // Stall detection: check every 10s if any uploading file hasn't had progress or heartbeat in 30s
+    setInterval(() => {
+      const now = Date.now();
+      const files = get().files;
+      const needsUpdate = files.some(f =>
+        f.status === 'uploading' &&
+        f.lastUpdateTime &&
+        (now - Math.max(f.lastUpdateTime, f.lastHeartbeat || 0)) > 30000 &&
+        !f.isStalled
+      );
+      if (needsUpdate) {
+        set(state => ({
+          files: state.files.map(f => {
+            if (f.status === 'uploading' && f.lastUpdateTime) {
+              const lastActivity = Math.max(f.lastUpdateTime, f.lastHeartbeat || 0);
+              if ((now - lastActivity) > 30000) {
+                return { ...f, isStalled: true };
+              }
+            }
+            return f;
+          })
+        }));
+      }
+    }, 10000);
   }
 
   return {
@@ -163,6 +207,13 @@ export const useUploadStore = create<UploadState>((set, get) => {
         }
       }
 
+      // EMA smoothed speed
+      const EMA_ALPHA = 0.3;
+      let emaSpeed = file?.emaSpeed || 0;
+      if (instantSpeed > 0) {
+        emaSpeed = emaSpeed === 0 ? instantSpeed : EMA_ALPHA * instantSpeed + (1 - EMA_ALPHA) * emaSpeed;
+      }
+
       set(state => ({
         files: state.files.map(f =>
           f.id === uploadId ? {
@@ -171,8 +222,11 @@ export const useUploadStore = create<UploadState>((set, get) => {
             uploadedBytes: bytesUploaded,
             speed: avgSpeed,
             instantSpeed,
+            emaSpeed,
             lastUpdateTime: now,
-            lastUpdateBytes: bytesUploaded
+            lastUpdateBytes: bytesUploaded,
+            lastHeartbeat: now,
+            isStalled: false
           } : f
         )
       }));
@@ -326,17 +380,17 @@ export const useUploadStore = create<UploadState>((set, get) => {
     retryUpload: (id: string) => {
       set(state => ({
         files: state.files.map(f =>
-          f.id === id ? { ...f, status: 'pending', progress: 0, error: undefined, uploadedBytes: 0 } : f
+          f.id === id ? { ...f, status: 'pending', error: undefined, isStalled: false } : f
         )
       }));
       get().startUpload(id);
     },
 
     retryAllFailed: () => {
-      // Reset all failed files to pending
+      // Reset all failed files to pending — keep progress/bytes for TUS resume
       set(state => ({
         files: state.files.map(f =>
-          f.status === 'error' ? { ...f, status: 'pending', progress: 0, error: undefined, uploadedBytes: 0 } : f
+          f.status === 'error' ? { ...f, status: 'pending', error: undefined, isStalled: false } : f
         )
       }));
       // Start uploads (respecting concurrent limit)

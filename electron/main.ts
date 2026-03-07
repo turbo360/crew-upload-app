@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, powerMonitor } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
@@ -381,24 +381,26 @@ interface UploadState {
 
 const activeUploads: Map<string, UploadState> = new Map();
 const CHUNK_SIZE = 50 * 1024 * 1024; // 50MB chunks - better for internet uploads (faster recovery, better progress)
-const MAX_RETRIES = 3;
-const RETRY_DELAYS = [1000, 3000, 10000]; // Exponential backoff: 1s, 3s, 10s
+const MAX_RETRIES = 5;
+const RETRY_DELAYS = [1000, 3000, 10000, 20000, 30000]; // Extended backoff
 
 // HTTP agents with keep-alive for connection reuse and optimized for uploads
 const httpAgent = new http.Agent({
   keepAlive: true,
-  keepAliveMsecs: 60000,
-  maxSockets: 50,
-  maxFreeSockets: 20,
-  timeout: 300000, // 5 minute timeout for large uploads
+  keepAliveMsecs: 30000,
+  maxSockets: 16,
+  maxFreeSockets: 8,
+  timeout: 300000,
+  scheduling: 'fifo',
 });
 
 const httpsAgent = new https.Agent({
   keepAlive: true,
-  keepAliveMsecs: 60000,
-  maxSockets: 50,
-  maxFreeSockets: 20,
+  keepAliveMsecs: 30000,
+  maxSockets: 16,
+  maxFreeSockets: 8,
   timeout: 300000,
+  scheduling: 'fifo',
 });
 
 // Upload logging
@@ -414,11 +416,18 @@ interface UploadLog {
 
 const uploadLogs: UploadLog[] = [];
 
+let logWritePending = false;
 function logUpload(log: UploadLog) {
   uploadLogs.push(log);
-  const logPath = path.join(app.getPath('userData'), 'upload-log.json');
-  fs.writeFileSync(logPath, JSON.stringify(uploadLogs, null, 2));
   console.log(`[Upload ${log.status}] ${log.filename}${log.error ? ` - ${log.error}` : ''}`);
+  if (!logWritePending) {
+    logWritePending = true;
+    process.nextTick(() => {
+      logWritePending = false;
+      const logPath = path.join(app.getPath('userData'), 'upload-log.json');
+      fs.writeFile(logPath, JSON.stringify(uploadLogs, null, 2), () => {});
+    });
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -428,6 +437,28 @@ function sleep(ms: number): Promise<void> {
 function sendProgress(uploadId: string, bytesUploaded: number, bytesTotal: number) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('upload-progress', { uploadId, bytesUploaded, bytesTotal });
+  }
+}
+
+function sendHeartbeat(uploadId: string) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('upload-heartbeat', { uploadId });
+  }
+}
+
+const activeHeartbeats: Map<string, ReturnType<typeof setInterval>> = new Map();
+
+function startHeartbeat(uploadId: string) {
+  stopHeartbeat(uploadId);
+  const interval = setInterval(() => sendHeartbeat(uploadId), 5000);
+  activeHeartbeats.set(uploadId, interval);
+}
+
+function stopHeartbeat(uploadId: string) {
+  const interval = activeHeartbeats.get(uploadId);
+  if (interval) {
+    clearInterval(interval);
+    activeHeartbeats.delete(uploadId);
   }
 }
 
@@ -548,14 +579,16 @@ function makeRequest(
 ): Promise<{ statusCode: number; headers: http.IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
     const parsedUrl = new URL(url);
-    const protocol = parsedUrl.protocol === 'https:' ? https : http;
+    const isHttps = parsedUrl.protocol === 'https:';
+    const protocol = isHttps ? https : http;
 
     const options: http.RequestOptions = {
       hostname: parsedUrl.hostname,
-      port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+      port: parsedUrl.port || (isHttps ? 443 : 80),
       path: parsedUrl.pathname + parsedUrl.search,
       method,
       headers,
+      agent: isHttps ? httpsAgent : httpAgent,
     };
 
     const req = protocol.request(options, (res) => {
@@ -570,6 +603,7 @@ function makeRequest(
       });
     });
 
+    req.setTimeout(30000, () => req.destroy(new Error('Request timeout')));
     req.on('error', reject);
 
     if (body instanceof fs.ReadStream) {
@@ -697,21 +731,40 @@ async function uploadChunk(
       });
     });
 
+    // Dynamic timeout based on chunk size (minimum 120s)
+    const chunkTimeout = Math.max(120000, (actualChunkSize / (100 * 1024)) * 1000);
+    req.setTimeout(chunkTimeout, () => req.destroy(new Error('Request timeout')));
     req.on('error', reject);
 
-    // Stream file directly to request - no memory buffering!
+    // Stream file with sub-chunk progress reporting every 250ms
     const fileStream = fs.createReadStream(filePath, {
       start: offset,
       end: offset + actualChunkSize - 1,
       highWaterMark: 16 * 1024 * 1024 // 16MB read buffer for maximum throughput
     });
 
+    let bytesSentInChunk = 0;
+    let lastProgressTime = Date.now();
+    const PROGRESS_INTERVAL_MS = 250;
+
+    fileStream.on('data', (data: Buffer) => {
+      const canContinue = req.write(data);
+      bytesSentInChunk += data.length;
+      const now = Date.now();
+      if (now - lastProgressTime >= PROGRESS_INTERVAL_MS) {
+        sendProgress(uploadId, offset + bytesSentInChunk, fileSize);
+        lastProgressTime = now;
+      }
+      if (!canContinue) {
+        fileStream.pause();
+        req.once('drain', () => fileStream.resume());
+      }
+    });
+    fileStream.on('end', () => req.end());
     fileStream.on('error', (err) => {
       req.destroy();
       reject(err);
     });
-
-    fileStream.pipe(req);
   });
 }
 
@@ -741,6 +794,7 @@ async function runUpload(
     size: fileSize
   });
 
+  startHeartbeat(uploadId);
   let retryCount = 0;
 
   while (retryCount <= MAX_RETRIES) {
@@ -781,6 +835,7 @@ async function runUpload(
       }
 
       // Complete!
+      stopHeartbeat(uploadId);
       const duration = Date.now() - startTime;
       logUpload({
         timestamp: new Date().toISOString(),
@@ -798,8 +853,10 @@ async function runUpload(
     } catch (error: any) {
       const errorMessage = error.message || 'Unknown error';
 
-      // Don't retry on token expiration
-      if (errorMessage.includes('Token expired')) {
+      // Don't retry on token expiration or file system errors
+      if (errorMessage.includes('Token expired') ||
+          error.code === 'ENOENT' || error.code === 'EACCES') {
+        stopHeartbeat(uploadId);
         logUpload({
           timestamp: new Date().toISOString(),
           uploadId,
@@ -811,10 +868,16 @@ async function runUpload(
         return;
       }
 
+      // Clear upload URL on 404/410 so next retry creates a fresh TUS upload
+      if (errorMessage.includes('404') || errorMessage.includes('410')) {
+        state.uploadUrl = undefined;
+      }
+
       retryCount++;
 
       if (retryCount <= MAX_RETRIES) {
-        const delay = RETRY_DELAYS[retryCount - 1] || RETRY_DELAYS[RETRY_DELAYS.length - 1];
+        const baseDelay = RETRY_DELAYS[Math.min(retryCount - 1, RETRY_DELAYS.length - 1)];
+        const delay = baseDelay + Math.random() * baseDelay * 0.5; // Jitter to prevent thundering herd
         logUpload({
           timestamp: new Date().toISOString(),
           uploadId,
@@ -822,10 +885,11 @@ async function runUpload(
           status: 'retrying',
           error: `${errorMessage} (attempt ${retryCount}/${MAX_RETRIES})`
         });
-        console.log(`Retrying upload ${filename} in ${delay}ms (attempt ${retryCount}/${MAX_RETRIES})`);
+        console.log(`Retrying upload ${filename} in ${Math.round(delay)}ms (attempt ${retryCount}/${MAX_RETRIES})`);
         await sleep(delay);
       } else {
         // All retries exhausted
+        stopHeartbeat(uploadId);
         logUpload({
           timestamp: new Date().toISOString(),
           uploadId,
@@ -910,6 +974,26 @@ ipcMain.handle('get-upload-logs', async () => {
 ipcMain.handle('open-logs-folder', async () => {
   const logPath = path.join(app.getPath('userData'), 'upload-log.json');
   shell.showItemInFolder(logPath);
+});
+
+// Sleep/wake handling - pause uploads on suspend, resume after wake
+app.whenReady().then(() => {
+  powerMonitor.on('suspend', () => {
+    console.log('System suspending - pausing active uploads');
+    for (const [uploadId, state] of activeUploads) {
+      if (!state.isPaused && !state.isAborted) {
+        state.isPaused = true;
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('upload-paused-by-system', { uploadId });
+        }
+      }
+    }
+  });
+
+  powerMonitor.on('resume', () => {
+    console.log('System resumed - uploads will resume via renderer');
+    // Renderer handles resume via network monitor
+  });
 });
 
 // Send email notification via backend API (Postmark key stored on server)

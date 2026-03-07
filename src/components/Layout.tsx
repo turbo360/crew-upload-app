@@ -11,7 +11,7 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   const { isAuthenticated, logout } = useAuthStore();
-  const { session, batches, clearSession } = useSessionStore();
+  const { session, batches, isBatchActive, startBatch, clearSession } = useSessionStore();
   const { clearAll, files } = useUploadStore();
   const [endingSession, setEndingSession] = useState(false);
 
@@ -32,24 +32,6 @@ export default function Layout({ children }: LayoutProps) {
     clearAll();
     clearSession();
     await logout();
-  };
-
-  const handleNewSession = () => {
-    const hasActiveUploads = files.some(f => f.status === 'uploading');
-    const totalFiles = batches.reduce((sum, b) => sum + b.fileCount, 0);
-
-    if (hasActiveUploads) {
-      if (!confirm('You have uploads in progress. Are you sure you want to start a new session? Active uploads will be cancelled.')) {
-        return;
-      }
-    } else if (totalFiles > 0) {
-      if (!confirm(`Start a new session? Current session has ${batches.length} batch${batches.length !== 1 ? 'es' : ''} with ${totalFiles} files. The team will NOT be notified unless you end the session first.`)) {
-        return;
-      }
-    }
-
-    clearAll();
-    clearSession();
   };
 
   const handleEndSession = async () => {
@@ -125,14 +107,6 @@ export default function Layout({ children }: LayoutProps) {
                 )}
 
                 <div className="flex items-center gap-2">
-                  {session && (
-                    <button
-                      onClick={handleNewSession}
-                      className="px-3 py-1.5 text-sm text-gray-300 hover:text-white transition-colors"
-                    >
-                      New
-                    </button>
-                  )}
                   <button
                     onClick={handleLogout}
                     className="px-3 py-1.5 text-sm text-gray-300 hover:text-white transition-colors"
@@ -155,6 +129,14 @@ export default function Layout({ children }: LayoutProps) {
       {isAuthenticated && (
         <footer className="relative z-10 bg-gray-900/80 backdrop-blur-sm border-t border-gray-700/50 py-3">
           <div className="px-4 sm:px-6 lg:px-8 space-y-3">
+            {session && !isBatchActive && (
+              <button
+                onClick={startBatch}
+                className="w-full px-6 py-3 bg-green-500 hover:bg-green-600 text-white rounded-lg font-bold transition-colors text-base"
+              >
+                {batches.length === 0 ? 'Start Batch 1' : 'Start Next Batch'}
+              </button>
+            )}
             {session && (
               <button
                 onClick={handleEndSession}

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useUploadStore } from '../stores/uploadStore';
 import { formatFileSize, formatSpeed, formatTimeRemaining } from '../utils/format';
 
@@ -20,7 +20,7 @@ export default function BatchProgress({ batchNumber }: BatchProgressProps) {
     const uploadedBytes = files.reduce((sum, f) => sum + f.uploadedBytes, 0);
 
     const uploadingFiles = files.filter(f => f.status === 'uploading');
-    const totalSpeed = uploadingFiles.reduce((sum, f) => sum + (f.speed || 0), 0);
+    const totalSpeed = uploadingFiles.reduce((sum, f) => sum + (f.emaSpeed || f.speed || 0), 0);
 
     const overallProgress = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
 
@@ -55,7 +55,25 @@ export default function BatchProgress({ batchNumber }: BatchProgressProps) {
         {stats.totalSpeed > 0 && stats.uploadedBytes < stats.totalBytes && (
           <span>ETA ~{formatTimeRemaining(stats.totalBytes - stats.uploadedBytes, stats.totalSpeed)}</span>
         )}
+        {stats.uploading > 0 && <ElapsedTimer />}
       </div>
     </div>
   );
+}
+
+function ElapsedTimer() {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const start = Date.now();
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+
+  return <span>{mins > 0 ? `${mins}m ${secs}s` : `${secs}s`} elapsed</span>;
 }

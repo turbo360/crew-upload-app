@@ -47,6 +47,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('upload-error', handler);
   },
 
+  onUploadHeartbeat: (callback: (data: { uploadId: string }) => void) => {
+    const handler = (_: any, data: any) => callback(data);
+    ipcRenderer.on('upload-heartbeat', handler);
+    return () => ipcRenderer.removeListener('upload-heartbeat', handler);
+  },
+
+  onUploadPausedBySystem: (callback: (data: { uploadId: string }) => void) => {
+    const handler = (_: any, data: any) => callback(data);
+    ipcRenderer.on('upload-paused-by-system', handler);
+    return () => ipcRenderer.removeListener('upload-paused-by-system', handler);
+  },
+
   onTokenExpired: (callback: () => void) => {
     const handler = () => callback();
     ipcRenderer.on('token-expired', handler);
@@ -132,6 +144,8 @@ declare global {
       onUploadProgress: (callback: (data: { uploadId: string; bytesUploaded: number; bytesTotal: number }) => void) => () => void;
       onUploadComplete: (callback: (data: { uploadId: string }) => void) => () => void;
       onUploadError: (callback: (data: { uploadId: string; error: string }) => void) => () => void;
+      onUploadHeartbeat: (callback: (data: { uploadId: string }) => void) => () => void;
+      onUploadPausedBySystem: (callback: (data: { uploadId: string }) => void) => () => void;
       onTokenExpired: (callback: () => void) => () => void;
       sendCompletionEmail: (params: { projectName: string; crewName: string; batchNumber?: number; fileCount: number; totalSize: string; fileNames: string[] }) => Promise<{ success: boolean }>;
 

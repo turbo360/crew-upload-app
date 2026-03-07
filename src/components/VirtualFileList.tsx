@@ -66,7 +66,7 @@ function VirtualFileItem({ file, onRemove, onRetry, onPause, onResume }: {
   onPause: () => void;
   onResume: () => void;
 }) {
-  const displaySpeed = file.instantSpeed && file.instantSpeed > 0 ? file.instantSpeed : file.speed;
+  const displaySpeed = file.emaSpeed && file.emaSpeed > 0 ? file.emaSpeed : file.speed;
 
   return (
     <div className="px-4 py-3 hover:bg-gray-700/30 transition-colors border-b border-gray-700/50 last:border-0">
@@ -88,15 +88,21 @@ function VirtualFileItem({ file, onRemove, onRetry, onPause, onResume }: {
                     file.status === 'error' ? 'bg-red-500' :
                     file.status === 'paused' ? 'bg-yellow-500' :
                     'bg-orange-500'
-                  }`}
+                  } ${file.status === 'uploading' ? 'shimmer-bar' : ''}`}
                   style={{ width: `${file.progress}%` }}
                 />
               </div>
-              <span className="text-xs text-gray-400 w-8 text-right">{file.progress}%</span>
+              <span className="text-xs text-gray-400 w-8 text-right">
+                {file.status === 'uploading' && file.progress === 0 ? 'Starting...' : `${file.progress}%`}
+              </span>
               {file.status === 'uploading' && displaySpeed && displaySpeed > 0 && (
-                <span className="text-xs text-orange-400 font-mono">{formatSpeed(displaySpeed)}</span>
+                <span className="text-xs text-orange-400 font-mono" style={{ fontVariantNumeric: 'tabular-nums' }}>{formatSpeed(displaySpeed)}</span>
               )}
             </div>
+          )}
+
+          {file.isStalled && file.status === 'uploading' && (
+            <p className="text-xs text-yellow-400 mt-0.5">Slow connection — still uploading...</p>
           )}
 
           {file.status === 'error' && file.error && (

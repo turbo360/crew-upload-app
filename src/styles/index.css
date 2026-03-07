@@ -76,3 +76,21 @@ body {
 .progress-uploading {
   animation: progress-pulse 2s ease-in-out infinite;
 }
+
+/* Shimmer animation for active upload progress bars */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.shimmer-bar {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.15) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+  background-color: #f97316;
+}

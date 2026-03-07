@@ -39,6 +39,8 @@ interface Window {
     onUploadProgress: (callback: (data: { uploadId: string; bytesUploaded: number; bytesTotal: number }) => void) => () => void;
     onUploadComplete: (callback: (data: { uploadId: string }) => void) => () => void;
     onUploadError: (callback: (data: { uploadId: string; error: string }) => void) => () => void;
+    onUploadHeartbeat: (callback: (data: { uploadId: string }) => void) => () => void;
+    onUploadPausedBySystem: (callback: (data: { uploadId: string }) => void) => () => void;
     onTokenExpired: (callback: () => void) => () => void;
     sendCompletionEmail: (params: { projectName: string; crewName: string; batchNumber?: number; fileCount: number; totalSize: string; fileNames: string[] }) => Promise<{ success: boolean }>;
 

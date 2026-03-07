@@ -76,7 +76,7 @@ export default function BatchTrackerPanel() {
       {!isBatchActive && (
         <button
           onClick={startBatch}
-          className="w-full px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg font-medium transition-colors text-sm"
+          className="w-full px-4 py-4 bg-green-500 hover:bg-green-600 text-white rounded-lg font-bold transition-colors text-base"
         >
           {batches.length === 0 ? `Start Batch ${currentBatchNumber}` : 'Start Next Batch'}
         </button>
