@@ -1,6 +1,6 @@
 {
   "name": "crew-upload-desktop",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Turbo 360 Crew Upload Desktop Application",
   "main": "dist-electron/main.js",
   "author": "Turbo 360",

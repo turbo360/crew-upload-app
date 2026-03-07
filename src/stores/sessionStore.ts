@@ -27,8 +27,10 @@ interface SessionState {
   error: string | null;
   batches: BatchRecord[];
   currentBatchNumber: number;
+  isBatchActive: boolean;
   createSession: (projectName: string, crewName: string, notes?: string) => Promise<boolean>;
   completeBatch: (stats: Omit<BatchRecord, 'batchNumber'>) => void;
+  startBatch: () => void;
   startNewBatch: () => void;
   clearSession: () => void;
   clearError: () => void;
@@ -42,6 +44,7 @@ export const useSessionStore = create<SessionState>()(
       error: null,
       batches: [],
       currentBatchNumber: 1,
+      isBatchActive: false,
 
       createSession: async (projectName: string, crewName: string, notes?: string) => {
         set({ isLoading: true, error: null });
@@ -92,8 +95,13 @@ export const useSessionStore = create<SessionState>()(
         };
         set({
           batches: [...batches, batchRecord],
-          currentBatchNumber: currentBatchNumber + 1
+          currentBatchNumber: currentBatchNumber + 1,
+          isBatchActive: false
         });
+      },
+
+      startBatch: () => {
+        set({ isBatchActive: true });
       },
 
       startNewBatch: () => {
@@ -109,7 +117,8 @@ export const useSessionStore = create<SessionState>()(
         set({
           session: null,
           batches: [],
-          currentBatchNumber: 1
+          currentBatchNumber: 1,
+          isBatchActive: false
         });
       },
       clearError: () => set({ error: null })
@@ -119,7 +128,8 @@ export const useSessionStore = create<SessionState>()(
       partialize: (state) => ({
         session: state.session,
         batches: state.batches,
-        currentBatchNumber: state.currentBatchNumber
+        currentBatchNumber: state.currentBatchNumber,
+        isBatchActive: state.isBatchActive
       })
     }
   )

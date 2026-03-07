@@ -228,6 +228,11 @@ export const useUploadStore = create<UploadState>((set, get) => {
       set(state => ({
         files: [...state.files, ...filesToAdd]
       }));
+
+      // Auto-start uploads when files are added
+      if (filesToAdd.length > 0) {
+        get().startAllUploads();
+      }
     },
 
     removeFile: (id: string) => {
