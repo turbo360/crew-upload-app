@@ -1142,7 +1142,9 @@ async function uploadPart(
         return false;
       }
 
-      if (errorMessage.includes('404') || errorMessage.includes('410')) {
+      // Only reset URL on 410 Gone (server explicitly deleted the upload)
+      // 404 during reconnection is likely transient — keep URL for resume
+      if (errorMessage.includes('410')) {
         uploadUrl = undefined;
       }
 
@@ -1231,8 +1233,12 @@ function uploadPartChunk(
       const canContinue = req.write(data);
       bytesSentInChunk += data.length;
 
-      // Update tracker for aggregate progress
-      tracker.partBytesUploaded.set(partIndex, tusOffset + bytesSentInChunk);
+      // Update tracker for aggregate progress (never decrease — prevents jumps on retry)
+      const newVal = tusOffset + bytesSentInChunk;
+      const prevVal = tracker.partBytesUploaded.get(partIndex) || 0;
+      if (newVal > prevVal) {
+        tracker.partBytesUploaded.set(partIndex, newVal);
+      }
 
       const now = Date.now();
       if (now - lastProgressTime >= PROGRESS_INTERVAL_MS) {

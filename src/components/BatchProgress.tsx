@@ -35,15 +35,21 @@ export default function BatchProgress({ batchNumber }: BatchProgressProps) {
   return (
     <div className="bg-gray-900/70 backdrop-blur-sm rounded-lg p-4 border border-gray-700/50">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm font-semibold text-white">
+        <span className="text-sm font-semibold text-white flex items-center gap-2">
           Batch {batchNumber} &mdash; {isComplete ? 'Complete' : 'Uploading'}
+          {!isComplete && stats.uploading > 0 && (
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500" />
+            </span>
+          )}
         </span>
         <span className="text-sm font-medium text-white">{stats.overallProgress}%</span>
       </div>
 
       <div className="h-2 bg-gray-700 rounded-full overflow-hidden mb-3">
         <div
-          className={`h-full transition-all duration-300 rounded-full ${barColor}`}
+          className={`h-full transition-all duration-300 rounded-full ${barColor} ${!isComplete && stats.uploading > 0 ? 'shimmer-bar' : ''}`}
           style={{ width: `${stats.overallProgress}%` }}
         />
       </div>
