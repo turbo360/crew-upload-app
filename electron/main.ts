@@ -380,7 +380,9 @@ interface UploadState {
 }
 
 const activeUploads: Map<string, UploadState> = new Map();
-const CHUNK_SIZE = 50 * 1024 * 1024; // 50MB chunks - better for internet uploads (faster recovery, better progress)
+const CHUNK_SIZE = 100 * 1024 * 1024; // 100MB chunks - balance of speed (fewer HTTP round-trips) and progress visibility
+const PARALLEL_STREAMS = 4; // Number of parallel streams for large files
+const PARALLEL_THRESHOLD = 500 * 1024 * 1024; // 500MB - files larger than this use parallel upload
 const MAX_RETRIES = 5;
 const RETRY_DELAYS = [1000, 3000, 10000, 20000, 30000]; // Extended backoff
 
@@ -905,6 +907,352 @@ async function runUpload(
   }
 }
 
+// ============================================
+// PARALLEL UPLOAD IMPLEMENTATION
+// Splits large files into N parts, uploads each as a separate tus upload concurrently,
+// server concatenates them when all parts arrive.
+// ============================================
+
+interface ParallelUploadTracker {
+  uploadId: string;
+  totalParts: number;
+  completedParts: number;
+  failedParts: number;
+  partBytesUploaded: Map<number, number>;
+  totalSize: number;
+  isAborted: boolean;
+  isPaused: boolean;
+}
+
+const parallelTrackers: Map<string, ParallelUploadTracker> = new Map();
+
+function sendParallelProgress(tracker: ParallelUploadTracker) {
+  let totalUploaded = 0;
+  for (const bytes of tracker.partBytesUploaded.values()) {
+    totalUploaded += bytes;
+  }
+  sendProgress(tracker.uploadId, totalUploaded, tracker.totalSize);
+}
+
+async function runParallelUpload(
+  uploadId: string,
+  filePath: string,
+  endpoint: string,
+  metadata: Record<string, string>,
+  token: string
+) {
+  const fileSize = fs.statSync(filePath).size;
+  const filename = metadata.filename || path.basename(filePath);
+  const startTime = Date.now();
+  const numParts = PARALLEL_STREAMS;
+  const partSize = Math.ceil(fileSize / numParts);
+  const groupId = `parallel-${uploadId}-${Date.now()}`;
+
+  logUpload({
+    timestamp: new Date().toISOString(),
+    uploadId,
+    filename,
+    status: 'started',
+    size: fileSize
+  });
+
+  console.log(`[Parallel Upload] Starting ${numParts}-stream upload for ${filename} (${(fileSize / 1024 / 1024).toFixed(0)}MB)`);
+
+  // Create tracker
+  const tracker: ParallelUploadTracker = {
+    uploadId,
+    totalParts: numParts,
+    completedParts: 0,
+    failedParts: 0,
+    partBytesUploaded: new Map(),
+    totalSize: fileSize,
+    isAborted: false,
+    isPaused: false,
+  };
+  parallelTrackers.set(uploadId, tracker);
+
+  // Also register in activeUploads for pause/abort support
+  activeUploads.set(uploadId, { offset: 0, isPaused: false, isAborted: false });
+
+  startHeartbeat(uploadId);
+
+  // Upload each part concurrently
+  const partPromises: Promise<boolean>[] = [];
+
+  for (let i = 0; i < numParts; i++) {
+    const partStart = i * partSize;
+    const partEnd = Math.min(partStart + partSize, fileSize);
+    const actualPartSize = partEnd - partStart;
+
+    tracker.partBytesUploaded.set(i, 0);
+
+    const partPromise = uploadPart(
+      endpoint, filePath, token,
+      groupId, i, numParts, actualPartSize, partStart, partEnd,
+      metadata, tracker
+    );
+    partPromises.push(partPromise);
+  }
+
+  const results = await Promise.all(partPromises);
+  stopHeartbeat(uploadId);
+
+  // Check if aborted
+  const state = activeUploads.get(uploadId);
+  if (state?.isAborted || tracker.isAborted) {
+    activeUploads.delete(uploadId);
+    parallelTrackers.delete(uploadId);
+    return;
+  }
+
+  // Check if all parts succeeded
+  const allSucceeded = results.every(r => r === true);
+
+  if (allSucceeded) {
+    const duration = Date.now() - startTime;
+    const speedMBs = (fileSize / 1024 / 1024) / (duration / 1000);
+    logUpload({
+      timestamp: new Date().toISOString(),
+      uploadId,
+      filename,
+      status: 'completed',
+      size: fileSize,
+      duration
+    });
+    console.log(`[Parallel Upload] Completed ${filename} in ${(duration / 1000).toFixed(1)}s (${speedMBs.toFixed(1)} MB/s)`);
+    sendComplete(uploadId);
+  } else {
+    logUpload({
+      timestamp: new Date().toISOString(),
+      uploadId,
+      filename,
+      status: 'failed',
+      error: `${tracker.failedParts} of ${numParts} parts failed`
+    });
+    sendError(uploadId, `Upload failed: ${tracker.failedParts} of ${numParts} parts could not be uploaded`);
+  }
+
+  activeUploads.delete(uploadId);
+  parallelTrackers.delete(uploadId);
+}
+
+async function uploadPart(
+  endpoint: string,
+  filePath: string,
+  token: string,
+  groupId: string,
+  partIndex: number,
+  totalParts: number,
+  partSize: number,
+  partStart: number,
+  partEnd: number,
+  originalMetadata: Record<string, string>,
+  tracker: ParallelUploadTracker
+): Promise<boolean> {
+  // Create a tus upload for this part with group metadata
+  const partMetadata: Record<string, string> = {
+    ...originalMetadata,
+    groupId,
+    partIndex: String(partIndex),
+    totalParts: String(totalParts),
+  };
+
+  const metadataStr = Object.entries(partMetadata)
+    .map(([k, v]) => `${k} ${Buffer.from(v).toString('base64')}`)
+    .join(',');
+
+  let retryCount = 0;
+  let uploadUrl: string | undefined;
+  let offset = 0;
+
+  while (retryCount <= MAX_RETRIES) {
+    try {
+      // Check abort/pause
+      const state = activeUploads.get(tracker.uploadId);
+      if (!state || state.isAborted || tracker.isAborted) return false;
+      if (state.isPaused) {
+        await sleep(1000);
+        continue;
+      }
+
+      // Create the partial tus upload if needed
+      if (!uploadUrl) {
+        const response = await makeRequest(endpoint, 'POST', {
+          'Authorization': `Bearer ${token}`,
+          'Tus-Resumable': '1.0.0',
+          'Upload-Length': String(partSize),
+          'Upload-Metadata': metadataStr,
+          'Content-Type': 'application/offset+octet-stream',
+        });
+
+        if (response.statusCode !== 201) {
+          if (isTokenExpiredError(response.statusCode, response.body)) {
+            sendTokenExpired();
+            return false;
+          }
+          throw new Error(`Failed to create part upload: ${response.statusCode}`);
+        }
+
+        const location = response.headers['location'];
+        if (!location) throw new Error('No location header');
+
+        if (location.startsWith('/')) {
+          const parsedEndpoint = new URL(endpoint);
+          uploadUrl = `${parsedEndpoint.protocol}//${parsedEndpoint.host}${location}`;
+        } else {
+          uploadUrl = location;
+        }
+      }
+
+      // Get current offset for resumption
+      const headResponse = await makeRequest(uploadUrl, 'HEAD', {
+        'Authorization': `Bearer ${token}`,
+        'Tus-Resumable': '1.0.0',
+      });
+
+      if (headResponse.statusCode === 200 || headResponse.statusCode === 204) {
+        offset = parseInt(headResponse.headers['upload-offset'] as string, 10) || 0;
+      }
+
+      // Upload the part data in chunks
+      while (offset < partSize) {
+        const state = activeUploads.get(tracker.uploadId);
+        if (!state || state.isAborted || tracker.isAborted) return false;
+
+        const chunkSize = Math.min(CHUNK_SIZE, partSize - offset);
+        const fileOffset = partStart + offset; // Offset within the actual file
+
+        const newOffset = await uploadPartChunk(
+          uploadUrl, filePath, fileOffset, offset, chunkSize, partSize,
+          token, tracker, partIndex
+        );
+
+        offset = newOffset;
+        retryCount = 0;
+      }
+
+      return true; // Part complete
+
+    } catch (error: any) {
+      const errorMessage = error.message || 'Unknown error';
+
+      if (errorMessage.includes('Token expired') ||
+          error.code === 'ENOENT' || error.code === 'EACCES') {
+        tracker.failedParts++;
+        return false;
+      }
+
+      if (errorMessage.includes('404') || errorMessage.includes('410')) {
+        uploadUrl = undefined;
+      }
+
+      retryCount++;
+      if (retryCount <= MAX_RETRIES) {
+        const baseDelay = RETRY_DELAYS[Math.min(retryCount - 1, RETRY_DELAYS.length - 1)];
+        const delay = baseDelay + Math.random() * baseDelay * 0.5;
+        console.log(`[Part ${partIndex}] Retrying in ${Math.round(delay)}ms (attempt ${retryCount}/${MAX_RETRIES})`);
+        await sleep(delay);
+      } else {
+        tracker.failedParts++;
+        return false;
+      }
+    }
+  }
+
+  tracker.failedParts++;
+  return false;
+}
+
+function uploadPartChunk(
+  uploadUrl: string,
+  filePath: string,
+  fileOffset: number,
+  tusOffset: number,
+  chunkSize: number,
+  partSize: number,
+  token: string,
+  tracker: ParallelUploadTracker,
+  partIndex: number
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(uploadUrl);
+    const isHttps = parsedUrl.protocol === 'https:';
+    const protocol = isHttps ? https : http;
+
+    const options: http.RequestOptions = {
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (isHttps ? 443 : 80),
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: 'PATCH',
+      agent: isHttps ? httpsAgent : httpAgent,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Tus-Resumable': '1.0.0',
+        'Upload-Offset': String(tusOffset),
+        'Content-Type': 'application/offset+octet-stream',
+        'Content-Length': String(chunkSize),
+      },
+    };
+
+    const req = protocol.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode !== 204 && res.statusCode !== 200) {
+          if (isTokenExpiredError(res.statusCode || 0, data)) {
+            sendTokenExpired();
+            reject(new Error('Token expired'));
+            return;
+          }
+          reject(new Error(`Part upload failed: ${res.statusCode} ${data}`));
+          return;
+        }
+        const newOffset = parseInt(res.headers['upload-offset'] as string, 10);
+        resolve(newOffset);
+      });
+    });
+
+    const chunkTimeout = Math.max(120000, (chunkSize / (100 * 1024)) * 1000);
+    req.setTimeout(chunkTimeout, () => req.destroy(new Error('Request timeout')));
+    req.on('error', reject);
+
+    // Stream from file at the correct offset
+    const fileStream = fs.createReadStream(filePath, {
+      start: fileOffset,
+      end: fileOffset + chunkSize - 1,
+      highWaterMark: 16 * 1024 * 1024
+    });
+
+    let bytesSentInChunk = 0;
+    let lastProgressTime = Date.now();
+    const PROGRESS_INTERVAL_MS = 200;
+
+    fileStream.on('data', (data: Buffer) => {
+      const canContinue = req.write(data);
+      bytesSentInChunk += data.length;
+
+      // Update tracker for aggregate progress
+      tracker.partBytesUploaded.set(partIndex, tusOffset + bytesSentInChunk);
+
+      const now = Date.now();
+      if (now - lastProgressTime >= PROGRESS_INTERVAL_MS) {
+        sendParallelProgress(tracker);
+        lastProgressTime = now;
+      }
+
+      if (!canContinue) {
+        fileStream.pause();
+        req.once('drain', () => fileStream.resume());
+      }
+    });
+    fileStream.on('end', () => req.end());
+    fileStream.on('error', (err) => {
+      req.destroy();
+      reject(err);
+    });
+  });
+}
+
 // IPC handlers for upload control
 ipcMain.handle('start-upload', async (_, params: {
   uploadId: string;
@@ -914,9 +1262,14 @@ ipcMain.handle('start-upload', async (_, params: {
   token: string;
 }) => {
   const { uploadId, filePath, endpoint, metadata, token } = params;
+  const fileSize = fs.statSync(filePath).size;
 
-  // Start upload in background
-  runUpload(uploadId, filePath, endpoint, metadata, token).catch(err => {
+  // Use parallel upload for large files, single stream for small ones
+  const uploadFn = fileSize >= PARALLEL_THRESHOLD
+    ? runParallelUpload
+    : runUpload;
+
+  uploadFn(uploadId, filePath, endpoint, metadata, token).catch(err => {
     console.error('Upload failed:', err);
     sendError(uploadId, err.message);
   });
