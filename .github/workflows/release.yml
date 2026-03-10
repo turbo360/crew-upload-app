@@ -67,8 +67,8 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
-          cp "release/Crew Upload-${VERSION}-arm64.dmg" "release/Crew-Upload-arm64.dmg"
-          cp "release/Crew Upload-${VERSION}.dmg" "release/Crew-Upload.dmg"
+          cp "release/Crew.Upload-${VERSION}-arm64.dmg" "release/Crew-Upload-arm64.dmg"
+          cp "release/Crew.Upload-${VERSION}.dmg" "release/Crew-Upload.dmg"
           gh release upload "$TAG" \
             "release/Crew-Upload-arm64.dmg" \
             "release/Crew-Upload.dmg" \
@@ -117,7 +117,7 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
-          cp "release/Crew Upload Setup ${VERSION}.exe" "release/Crew-Upload-Setup.exe"
+          cp "release/Crew-Upload-Setup-${VERSION}.exe" "release/Crew-Upload-Setup.exe"
           gh release upload "$TAG" \
             "release/Crew-Upload-Setup.exe" \
             --clobber
