@@ -56,6 +56,11 @@ export default function UploadPage() {
       const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
       const duration = new Date(completedAt).getTime() - new Date(startedAt).getTime();
 
+      // Capture values now before the timeout fires
+      const snapshotFileCount = files.length;
+      const snapshotCompletedCount = completedCount;
+      const snapshotFailedCount = failedCount;
+
       // Send batch completion notification (only once per batch)
       if (!emailSentRef.current && session && window.electronAPI) {
         emailSentRef.current = true;
@@ -73,18 +78,18 @@ export default function UploadPage() {
       // Record batch stats for the banner
       setBannerStats({
         batchNumber: currentBatchNumber,
-        fileCount: files.length,
+        fileCount: snapshotFileCount,
         totalBytes,
         duration,
-        failedFiles: failedCount
+        failedFiles: snapshotFailedCount
       });
 
       // After a 2-second celebration, complete the batch and clear for next
-      const timer = setTimeout(() => {
+      setTimeout(() => {
         completeBatch({
-          fileCount: files.length,
-          completedFiles: completedCount,
-          failedFiles: failedCount,
+          fileCount: snapshotFileCount,
+          completedFiles: snapshotCompletedCount,
+          failedFiles: snapshotFailedCount,
           totalBytes,
           startedAt,
           completedAt
@@ -94,10 +99,10 @@ export default function UploadPage() {
         batchStartRef.current = null;
         setShowBanner(true);
       }, 2000);
-
-      return () => clearTimeout(timer);
     }
-  }, [allDone, files, currentBatchNumber, completedCount, failedCount, completeBatch, clearForNewBatch, session]);
+  // Only trigger on allDone changing, not on every file update
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allDone]);
 
   return (
     <div className="flex h-full">
