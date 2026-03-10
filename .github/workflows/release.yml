@@ -61,6 +61,19 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx electron-builder --mac --publish always
 
+      - name: Upload stable-name assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          cp "release/Crew Upload-${VERSION}-arm64.dmg" "release/Crew-Upload-arm64.dmg"
+          cp "release/Crew Upload-${VERSION}.dmg" "release/Crew-Upload.dmg"
+          gh release upload "$TAG" \
+            "release/Crew-Upload-arm64.dmg" \
+            "release/Crew-Upload.dmg" \
+            --clobber
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -96,6 +109,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: npx electron-builder --win --publish always
+
+      - name: Upload stable-name assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          cp "release/Crew Upload Setup ${VERSION}.exe" "release/Crew-Upload-Setup.exe"
+          gh release upload "$TAG" \
+            "release/Crew-Upload-Setup.exe" \
+            --clobber
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
