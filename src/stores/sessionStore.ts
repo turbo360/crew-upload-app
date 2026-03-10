@@ -120,6 +120,8 @@ export const useSessionStore = create<SessionState>()(
           currentBatchNumber: 1,
           isBatchActive: false
         });
+        // Clear persisted storage so a new session is created next time
+        useSessionStore.persist.clearStorage();
       },
       clearError: () => set({ error: null })
     }),
