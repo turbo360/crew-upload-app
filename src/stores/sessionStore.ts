@@ -100,12 +100,37 @@ export const useSessionStore = create<SessionState>()(
         });
       },
 
-      startBatch: () => {
+      startBatch: async () => {
+        const { batches } = get();
+        // If not the first batch, create a new server session for the new Batch folder
+        if (batches.length > 0) {
+          await get().startNewBatch();
+        }
         set({ isBatchActive: true });
       },
 
-      startNewBatch: () => {
-        // currentBatchNumber is already incremented by completeBatch
+      startNewBatch: async () => {
+        // Create a new server session so uploads go to a new Batch folder
+        const { session } = get();
+        if (!session) return;
+        try {
+          const token = useAuthStore.getState().token;
+          const response = await api.post('/api/session/create', {
+            projectName: session.projectName,
+            crewName: session.crewName,
+            notes: session.notes
+          }, token!);
+          set({
+            session: {
+              ...session,
+              id: response.session.id,
+              createdAt: new Date().toISOString()
+            }
+          });
+          console.log('[Session] New batch session created:', response.session.id);
+        } catch (err: any) {
+          console.error('[Session] Failed to create new batch session:', err);
+        }
       },
 
       clearSession: () => {
