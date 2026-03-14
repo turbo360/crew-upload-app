@@ -54,13 +54,14 @@ export default function Layout({ children }: LayoutProps) {
           fileCount: totalFiles,
           totalSize: formatFileSize(totalBytes),
           fileNames: []
-        });
+        }).catch(() => {}); // Don't block session end if notification fails
       }
       clearAll();
       clearSession();
       await logout();
     } catch (error) {
       console.error('Failed to end session:', error);
+    } finally {
       setEndingSession(false);
     }
   };
