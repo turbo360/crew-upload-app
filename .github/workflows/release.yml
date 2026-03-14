@@ -67,8 +67,12 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
-          cp "release/Crew.Upload-${VERSION}-arm64.dmg" "release/Crew-Upload-arm64.dmg"
-          cp "release/Crew.Upload-${VERSION}.dmg" "release/Crew-Upload.dmg"
+          ls -la release/
+          # Find the arm64 and x64 DMGs (handles spaces, dots, or hyphens in name)
+          ARM64_DMG=$(find release -maxdepth 1 -name "*${VERSION}-arm64.dmg" -not -name "*.blockmap" | head -1)
+          X64_DMG=$(find release -maxdepth 1 -name "*${VERSION}.dmg" -not -name "*arm64*" -not -name "*.blockmap" | head -1)
+          cp "$ARM64_DMG" "release/Crew-Upload-arm64.dmg"
+          cp "$X64_DMG" "release/Crew-Upload.dmg"
           gh release upload "$TAG" \
             "release/Crew-Upload-arm64.dmg" \
             "release/Crew-Upload.dmg" \
@@ -117,7 +121,10 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
-          cp "release/Crew-Upload-Setup-${VERSION}.exe" "release/Crew-Upload-Setup.exe"
+          ls -la release/
+          # Find the setup EXE (handles spaces, dots, or hyphens in name)
+          SETUP_EXE=$(find release -maxdepth 1 -name "*Setup*${VERSION}.exe" | head -1)
+          cp "$SETUP_EXE" "release/Crew-Upload-Setup.exe"
           gh release upload "$TAG" \
             "release/Crew-Upload-Setup.exe" \
             --clobber
