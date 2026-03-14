@@ -124,8 +124,10 @@ export default function UploadPage() {
           />
         )}
 
-        {/* Drop Zone */}
-        <DropZone disabled={!isBatchActive} />
+        {/* Drop Zone - hidden once uploads have started */}
+        {(isBatchActive && uploadingCount === 0 && completedCount === 0 && failedCount === 0) || !isBatchActive ? (
+          <DropZone disabled={!isBatchActive} />
+        ) : null}
 
         {/* Active Batch: Progress + Controls + File Queue */}
         {isBatchActive && files.length > 0 && (

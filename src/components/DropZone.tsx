@@ -122,7 +122,7 @@ export default function DropZone({ disabled = false }: DropZoneProps) {
         </svg>
 
         <h3 className="mt-4 text-lg font-medium text-white">
-          {isDragOver ? 'Drop files here' : 'Drag and drop files or folders'}
+          {isDragOver ? 'Drop files here' : 'Drag and drop files'}
         </h3>
 
         {!isDragOver && (

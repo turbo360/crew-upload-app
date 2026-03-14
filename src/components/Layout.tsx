@@ -11,7 +11,7 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   const { isAuthenticated, logout } = useAuthStore();
-  const { session, batches, isBatchActive, startBatch, clearSession } = useSessionStore();
+  const { session, batches, clearSession } = useSessionStore();
   const { clearAll, files } = useUploadStore();
   const [endingSession, setEndingSession] = useState(false);
 
@@ -129,14 +129,6 @@ export default function Layout({ children }: LayoutProps) {
       {isAuthenticated && (
         <footer className="relative z-10 bg-gray-900/80 backdrop-blur-sm border-t border-gray-700/50 py-3">
           <div className="px-4 sm:px-6 lg:px-8 space-y-3">
-            {session && !isBatchActive && (
-              <button
-                onClick={startBatch}
-                className="w-full px-6 py-3 bg-green-500 hover:bg-green-600 text-white rounded-lg font-bold transition-colors text-base"
-              >
-                {batches.length === 0 ? 'Start Batch 1' : 'Start Next Batch'}
-              </button>
-            )}
             {session && (
               <button
                 onClick={handleEndSession}
