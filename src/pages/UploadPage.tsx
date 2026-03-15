@@ -8,10 +8,14 @@ import BatchProgress from '../components/BatchProgress';
 import BatchCompleteBanner from '../components/BatchCompleteBanner';
 import BatchTrackerPanel from '../components/BatchTrackerPanel';
 import { formatFileSize } from '../utils/format';
+import { useCommandWebSocket } from '../hooks/useCommandWebSocket';
 
 export default function UploadPage() {
   const { files, clearForNewBatch } = useUploadStore();
   const { session, currentBatchNumber, isBatchActive, completeBatch } = useSessionStore();
+
+  // Listen for admin retry commands via WebSocket
+  useCommandWebSocket();
 
   // Track the batch start time
   const batchStartRef = useRef<string | null>(null);
