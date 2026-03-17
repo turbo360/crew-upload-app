@@ -1,6 +1,6 @@
 {
   "name": "crew-upload-desktop",
-  "version": "1.8.0",
+  "version": "2.0.0",
   "description": "Turbo 360 Crew Upload Desktop Application",
   "main": "dist-electron/main.js",
   "author": "Turbo 360",
@@ -16,12 +16,9 @@
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\""
   },
   "dependencies": {
-    "@tanstack/react-virtual": "^3.13.19",
     "electron-updater": "^6.6.2",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "tus-js-client": "^4.1.0",
-    "zustand": "^4.4.7"
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
     "@electron/notarize": "^2.5.0",
